@@ -1,0 +1,216 @@
+import cv2
+import os
+import numpy as np
+import RPi.GPIO as GPIO
+from time import sleep
+import time
+from datetime import datetime
+
+GPIO.setmode(GPIO.BCM)
+
+m10 = 20
+m11 = 16
+m20 = 23
+m21 = 24
+reset = 2
+
+GPIO.setup(m10,GPIO.OUT)
+GPIO.setup(m11,GPIO.OUT)
+GPIO.setup(m20,GPIO.OUT)
+GPIO.setup(m21,GPIO.OUT)
+
+GPIO.setup(reset,GPIO.IN)
+
+p10 = GPIO.PWM(m10,50)
+p11 = GPIO.PWM(m11,50)
+p20 = GPIO.PWM(m20,50)
+p21 = GPIO.PWM(m21,50)
+p10.start(0)
+p11.start(0)
+p20.start(0)
+p21.start(0)
+
+kernel = np.ones((8,8),np.uint8)
+
+# Take input from webcam
+cap = cv2.VideoCapture(-1)
+
+# Reduce the size of video to 320x240 so rpi can process faster
+cap.set(3,320)
+cap.set(4,240)
+
+def left(turn = 180):
+    if turn == 180:
+        p10.ChangeDutyCycle(0)
+        p11.ChangeDutyCycle(0)
+        p20.ChangeDutyCycle(50)
+        p21.ChangeDutyCycle(0)
+        
+    else:
+        p10.ChangeDutyCycle(0)
+        p11.ChangeDutyCycle(30)
+        p20.ChangeDutyCycle(30)
+        p21.ChangeDutyCycle(0)
+        GPIO.output(m21, False)
+    
+def right(turn = 180):
+    if turn == 180:
+        p10.ChangeDutyCycle(50)
+        p11.ChangeDutyCycle(0)
+        p20.ChangeDutyCycle(0)
+        p21.ChangeDutyCycle(0)
+        
+    else:
+        p10.ChangeDutyCycle(30)
+        p11.ChangeDutyCycle(0)
+        p20.ChangeDutyCycle(0)
+        p21.ChangeDutyCycle(30)
+        
+        
+def frwd():
+    p10.ChangeDutyCycle(100)
+    p11.ChangeDutyCycle(0)
+    p20.ChangeDutyCycle(100)
+    p21.ChangeDutyCycle(0)
+        
+
+def stop():
+    p10.ChangeDutyCycle(0)
+    p11.ChangeDutyCycle(0)
+    p20.ChangeDutyCycle(0)
+    p21.ChangeDutyCycle(0)
+        
+    
+def nothing(x):
+    pass
+
+
+track = False
+x_angle = 0
+
+feedback = 0
+
+stop()
+
+v = 10
+fr = False
+notstop = False
+leftTurn = False
+rightTurn = False
+radius = 0
+
+##b = 0
+
+loop = True
+
+while main:
+
+    _, frame = cap.read()
+
+    #converting to HSV
+    hsv = cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)
+    hue,sat,val = cv2.split(hsv)
+    
+    hmn = 16
+    hmx = 45
+    
+
+    smn = 60
+    smx = 225
+
+
+    vmn = 145
+    vmx = 255
+
+    # Apply thresholding
+    hthresh = cv2.inRange(np.array(hue),np.array(hmn),np.array(hmx))
+    sthresh = cv2.inRange(np.array(sat),np.array(smn),np.array(smx))
+    vthresh = cv2.inRange(np.array(val),np.array(vmn),np.array(vmx))
+
+    # AND h s and v
+    tracking = cv2.bitwise_and(hthresh,cv2.bitwise_and(sthresh,vthresh))
+
+    # Some morpholigical filtering
+    dilation = cv2.dilate(tracking,kernel,iterations = 1)
+    closing = cv2.morphologyEx(dilation, cv2.MORPH_CLOSE, kernel)
+    closing = cv2.GaussianBlur(closing,(5,5),0)
+
+    # Detect circles using HoughCircles
+    circles = cv2.HoughCircles(closing,cv2.HOUGH_GRADIENT,2,120,param1=120,param2=50,minRadius=10,maxRadius=0)
+    # circles = np.uint16(np.around(circles))
+
+    x_angle = 0
+    
+    #Draw Circles
+    
+    if circles is not None:
+            index = 0
+            centrs = [None] * len(circles[0,:])
+            if len(circles[0,:]) < 2:
+                for i in circles[0,:]:
+                    # If the ball is far, draw it in green
+                    centrs[index] = (int(round(i[0])),int(round(i[1])))
+                    radius =  int(round(i[2]))
+                    if int(round(i[2])) < 60:
+                        cv2.circle(frame,(int(round(i[0])),int(round(i[1]))),int(round(i[2])),(0,255,0),5)
+                        cv2.circle(frame,(int(round(i[0])),int(round(i[1]))),2,(0,255,0),10)
+                                    # else draw it in red
+                    elif int(round(i[2])) > 60:
+                        cv2.circle(frame,(int(round(i[0])),int(round(i[1]))),int(round(i[2])),(0,0,255),5)
+                        cv2.circle(frame,(int(round(i[0])),int(round(i[1]))),2,(0,0,255),10)
+
+                    index = index + 1
+                    x_angle = int(round(i[0]))
+
+            elif len(circles[0,:]) > 2:
+                for i in circles[0,:]:
+                    # If the ball is far, draw it in green
+                    centrs[index] = (int(round(i[0])),int(round(i[1])))
+                    index = index + 1
+                points = np.array(centrs)
+                M = cv2.moments(points)
+                cX = int(M["m10"] / M["m00"])
+                cY = int(M["m01"] / M["m00"])
+                cv2.circle(frame,(cX , cY),7,(0,0,255),-1)
+                cv2.drawContours(frame,[points],0,(0,0,255),3)
+                x_angle = cX
+
+            elif len(circles[0,:]) == 2:
+                for i in circles[0,:]:
+                    # If the ball is far, draw it in green
+                    centrs[index] = (int(round(i[0])),int(round(i[1])))
+                    index = index + 1
+                centrs1 = centrs[0]
+                centrs2 = centrs[1]
+                x1 = centrs1[0]
+                x2 = centrs2[0]
+                y1 = centrs1[1]
+                y2 = centrs2[1]
+                x_mid = ( x2 + x1 )/2
+                y_mid = ( y2 + y1 )/2
+                print x_mid , y_mid
+                x_angle = x_mid
+                cv2.line(frame,centrs[0],centrs[1],(0,0,255),3)
+                cv2.circle(frame,(x_mid , y_mid),7,(0,0,255),-1)
+            
+    if x_angle <= 80 and x_angle != 0:
+        fr = False
+        notstop = True
+        leftTurn = True
+        rightTurn = False
+        left()
+    elif x_angle >= 240  and x_angle != 0:
+        fr = False
+        notstop = True
+        rightTurn = True
+        leftTurn = False
+        right()
+    elif x_angle > 80 and x_angle < 240:
+        notstop = True
+        rightTurn = False
+        leftTurn = False
+        fr = True
+        frwd()
+    elif x_angle == 0:
+        if fr == True:
+            stop()
